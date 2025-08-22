@@ -1,0 +1,82 @@
+body {
+    font-family: Arial, sans-serif;
+    padding: 10px;
+    width: 220px;
+}
+
+h2 {
+    font-size: 16px;
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 14px;
+}
+
+input {
+    width: 100%;
+    padding: 5px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    border: 1px solid #ccc;
+}
+
+button {
+    margin: 5px 0;
+    padding: 5px 10px;
+    width: 100%;
+    cursor: pointer;
+    background-color: #3897f0;
+    color: white;
+    border: none;
+    border-radius: 4px;
+}
+
+button:hover {
+    background-color: #2a76c0;
+}
+
+#loginView {
+    text-align: center;
+}
+
+#logoutBtn {
+    background-color: #888;
+}
+
+#logoutBtn:hover {
+    background-color: #666;
+}
+
+#autoFollowOverlay {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 10px;
+    border-radius: 5px;
+    z-index: 9999;
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    white-space: pre-line;
+}
+
+#autoFollowLog {
+    position: fixed;
+    top: 20px;
+    left: 20px;
+    background-color: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 10px;
+    border-radius: 5px;
+    z-index: 9999;
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    max-height: 60vh;
+    overflow-y: auto;
+    white-space: pre-line;
+}
