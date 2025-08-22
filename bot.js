@@ -55,17 +55,18 @@ async function detectRateLimitOrFail(btn) {
   return { ok: false, reason: 'timeout' };
 }
 
-class Bot {
-  constructor() {
-    this.rodando = false;
-    this.perfisSeguidos = 0;
-    this.limite = 10;
-    this.overlay = null;
-    this.logOverlay = null;
-    this.countdownInterval = null;
-    this.minDelay = 120000;
-    this.maxDelay = 180000;
-  }
+  class Bot {
+    constructor() {
+      this.rodando = false;
+      this.perfisSeguidos = 0;
+      this.limite = 10;
+      this.overlay = null;
+      this.logOverlay = null;
+      this.countdownInterval = null;
+      this.minDelay = 120000;
+      this.maxDelay = 180000;
+      this.likeFirstMedia = false;
+    }
 
   criarOverlays() {
     if (!document.getElementById('autoFollowStyles')) {
@@ -232,12 +233,33 @@ class Bot {
       const username = await this.extractUsernameFromFollowButton(btn);
       btn.click();
       const result = await detectRateLimitOrFail(btn);
-      if (result.ok) {
-        this.perfisSeguidos++;
-        this.addLog(username, '✔');
-        this.atualizarOverlay(`Seguido @${username} (${this.perfisSeguidos}/${this.limite})`);
-        await setState({ consecutiveFails: 0 });
-      } else {
+        if (result.ok) {
+          this.perfisSeguidos++;
+          this.addLog(username, '✔');
+          this.atualizarOverlay(`Seguido @${username} (${this.perfisSeguidos}/${this.limite})`);
+          await setState({ consecutiveFails: 0 });
+          if (this.likeFirstMedia) {
+            try {
+              const resLike = await chrome.runtime.sendMessage({
+                type: 'LIKE_FIRST_MEDIA',
+                profileUrl: `https://www.instagram.com/${encodeURIComponent(username)}/`,
+                bringToFront: true,
+              });
+              if (resLike?.reason === 'rate_limited') {
+                const st2 = await getState();
+                if (st2.pausedUntil && st2.pausedUntil > Date.now()) {
+                  const ret = new Date(st2.pausedUntil).toLocaleTimeString();
+                  this.atualizarOverlay(`Limite detectado. Pausado até ${ret}`);
+                } else {
+                  this.atualizarOverlay('Limite detectado.');
+                }
+                return;
+              }
+            } catch (e) {
+              console.warn('[BOT] like fail', e);
+            }
+          }
+        } else {
         this.addLog(username, '✖');
         const st = await getState();
         const newFails = st.consecutiveFails + 1;
@@ -305,20 +327,21 @@ class Bot {
     this.seguirProximoUsuario();
   }
 
-  async start(limiteParam, minDelayParam, maxDelayParam) {
-    if (this.rodando) return;
-    this.rodando = true;
-    this.perfisSeguidos = 0;
-    this.limite = limiteParam || 10;
-    const min = Number(minDelayParam || 120);
-    const max = Number(maxDelayParam || 180);
-    this.minDelay = Math.min(min, max) * 1000;
-    this.maxDelay = Math.max(min, max) * 1000;
-    await setState({ running: true, pausedUntil: 0, consecutiveFails: 0 });
-    chrome.runtime.sendMessage({ type: 'AF_CLEAR_ALARM' });
-    this.criarOverlays();
-    this.seguirProximoUsuario();
-  }
+    async start(limiteParam, minDelayParam, maxDelayParam, likeFirstMedia) {
+      if (this.rodando) return;
+      this.rodando = true;
+      this.perfisSeguidos = 0;
+      this.limite = limiteParam || 10;
+      const min = Number(minDelayParam || 120);
+      const max = Number(maxDelayParam || 180);
+      this.minDelay = Math.min(min, max) * 1000;
+      this.maxDelay = Math.max(min, max) * 1000;
+      this.likeFirstMedia = !!likeFirstMedia;
+      await setState({ running: true, pausedUntil: 0, consecutiveFails: 0 });
+      chrome.runtime.sendMessage({ type: 'AF_CLEAR_ALARM' });
+      this.criarOverlays();
+      this.seguirProximoUsuario();
+    }
 
   async stop() {
     this.rodando = false;

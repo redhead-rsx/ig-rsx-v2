@@ -161,11 +161,94 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return sendResponse({ ok: !!authorized });
       }
 
-      if (
-        ["START", "FOLLOW_ONE", "STOP", "AF_SET_ALARM", "AF_CLEAR_ALARM"].includes(
-          msg?.type
-        )
-      ) {
+        if (msg?.type === "LIKE_FIRST_MEDIA") {
+          const { auth, auth_lockUntil = 0, af_state = {} } = await chrome.storage.local.get([
+            "auth",
+            "auth_lockUntil",
+            "af_state",
+          ]);
+          const authorized = isAuthorized(auth, auth_lockUntil, now);
+          const paused = af_state.pausedUntil && af_state.pausedUntil > now;
+          const finished = af_state.stage >= 2;
+          if (!authorized || paused || finished) {
+            return sendResponse({ ok: false, error: "UNAUTHORIZED" });
+          }
+
+          const profileUrl = msg.profileUrl;
+          if (!profileUrl) return sendResponse({ type: "LIKE_SKIP", reason: "open_failed" });
+          console.log("[BG/LIKER] requesting like for", profileUrl);
+
+          let tab;
+          try {
+            tab = await new Promise((resolve) =>
+              chrome.tabs.create({ url: profileUrl, active: true }, resolve)
+            );
+          } catch (e) {
+            console.error("[BG/LIKER] create tab fail", e);
+            return sendResponse({ type: "LIKE_SKIP", reason: "open_failed" });
+          }
+
+          try {
+            await chrome.windows.update(tab.windowId, { focused: true });
+            await chrome.tabs.update(tab.id, { active: true });
+
+            const completed = new Promise((resolve) => {
+              const listener = (tid, info) => {
+                if (tid === tab.id && info.status === "complete") {
+                  chrome.tabs.onUpdated.removeListener(listener);
+                  resolve();
+                }
+              };
+              chrome.tabs.onUpdated.addListener(listener);
+            });
+            await Promise.race([
+              completed,
+              new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000)),
+            ]);
+            await new Promise((r) => setTimeout(r, 700 + Math.random() * 300));
+            const [inj] = await chrome.scripting.executeScript({
+              target: { tabId: tab.id },
+              files: ["liker.js"],
+              world: "MAIN",
+            });
+            const result = inj && inj.result ? inj.result : { type: "LIKE_SKIP", reason: "open_failed" };
+            console.log("[BG/LIKER] result", result);
+            if (result?.reason === "rate_limited") {
+              console.log("[BG/LIKER] rate limited");
+              const data = await chrome.storage.local.get(["af_state"]);
+              const st = data.af_state || {};
+              const now2 = Date.now();
+              if (st.stage === 0) {
+                const pausedUntil = now2 + 20 * 60 * 1000;
+                await chrome.storage.local.set({
+                  af_state: { ...st, pausedUntil, stage: 1, consecutiveFails: 0 },
+                });
+                chrome.alarms.create("autoFollowResume", { when: pausedUntil });
+              } else if (st.stage === 1) {
+                const pausedUntil = now2 + 30 * 60 * 1000;
+                await chrome.storage.local.set({
+                  af_state: { ...st, pausedUntil, stage: 2, consecutiveFails: 0 },
+                });
+                chrome.alarms.create("autoFollowResume", { when: pausedUntil });
+              } else {
+                await chrome.storage.local.set({
+                  af_state: { running: false, pausedUntil: 0, consecutiveFails: 0, stage: st.stage || 2 },
+                });
+                chrome.alarms.clear("autoFollowResume");
+              }
+            }
+            return sendResponse(result);
+          } catch (e) {
+            console.error("[BG/LIKER] error", e);
+            return sendResponse({ type: "LIKE_SKIP", reason: "open_failed" });
+          } finally {
+            if (tab?.id) chrome.tabs.remove(tab.id);
+          }
+        } else if (
+          ["START", "FOLLOW_ONE", "STOP", "AF_SET_ALARM", "AF_CLEAR_ALARM"].includes(
+            msg?.type
+          )
+        ) {
         const { auth, auth_lockUntil = 0 } = await chrome.storage.local.get([
           "auth",
           "auth_lockUntil",
