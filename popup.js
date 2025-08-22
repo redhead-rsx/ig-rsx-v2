@@ -16,14 +16,16 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshStatus();
   }
 
-  chrome.storage.sync.get(['minDelay', 'maxDelay', 'limite'], (data) => {
-    const quantidade = document.getElementById('quantidade');
-    const minDelay = document.getElementById('minDelay');
-    const maxDelay = document.getElementById('maxDelay');
-    if (quantidade) quantidade.value = data.limite || 10;
-    if (minDelay) minDelay.value = data.minDelay || 120;
-    if (maxDelay) maxDelay.value = data.maxDelay || 180;
-  });
+    chrome.storage.sync.get(['minDelay', 'maxDelay', 'limite', 'likeFirstMedia'], (data) => {
+      const quantidade = document.getElementById('quantidade');
+      const minDelay = document.getElementById('minDelay');
+      const maxDelay = document.getElementById('maxDelay');
+      const likeFirst = document.getElementById('likeFirstMedia');
+      if (quantidade) quantidade.value = data.limite || 10;
+      if (minDelay) minDelay.value = data.minDelay || 120;
+      if (maxDelay) maxDelay.value = data.maxDelay || 180;
+      if (likeFirst) likeFirst.checked = data.likeFirstMedia || false;
+    });
 
   function refreshStatus() {
     chrome.storage.local.get('af_state', (data) => {
@@ -55,11 +57,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   document.getElementById('startBtn')?.addEventListener('click', () => {
-    const limite = parseInt(document.getElementById('quantidade')?.value) || 10;
-    const minDelay = parseInt(document.getElementById('minDelay')?.value) || 120;
-    const maxDelay = parseInt(document.getElementById('maxDelay')?.value) || 180;
+      const limite = parseInt(document.getElementById('quantidade')?.value) || 10;
+      const minDelay = parseInt(document.getElementById('minDelay')?.value) || 120;
+      const maxDelay = parseInt(document.getElementById('maxDelay')?.value) || 180;
+      const likeFirst = document.getElementById('likeFirstMedia')?.checked || false;
 
-    chrome.storage.sync.set({ minDelay, maxDelay, limite });
+      chrome.storage.sync.set({ minDelay, maxDelay, limite, likeFirstMedia: likeFirst });
 
     chrome.storage.local.get('af_state', (data) => {
       const st = data.af_state || {};
@@ -67,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
         { af_state: { ...st, running: true, pausedUntil: 0, consecutiveFails: 0 } },
         () => {
           chrome.runtime.sendMessage({ type: 'AF_CLEAR_ALARM' });
-          sendMessageToActiveTab({ action: 'start', limite, minDelay, maxDelay });
+            sendMessageToActiveTab({ action: 'start', limite, minDelay, maxDelay, likeFirstMedia: likeFirst });
           refreshStatus();
         }
       );
