@@ -43,6 +43,46 @@
   }
   const waitOpened = (ms) => until(() => openedMode(), { timeout: ms, step: 150 });
 
+  async function findFirstMediaTarget() {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const link = [...document.querySelectorAll(
+        'article a[href*="/p/"], article a[href*="/reel/"]'
+      )].find(isVisible);
+      if (link) return { el: link, href: link.href };
+
+      const tile = [...document.querySelectorAll('article [role="link"]')]
+        .find(a => isVisible(a) && a.querySelector('img,canvas,video,svg[aria-label*="Reels" i]'));
+      if (tile) {
+        const inner = tile.querySelector('a[href*="/p/"],a[href*="/reel/"]');
+        if (inner && isVisible(inner)) return { el: inner, href: inner.href };
+        return { el: tile, href: null };
+      }
+
+      window.scrollBy(0, 600);
+      await sleep(250);
+    }
+    return null;
+  }
+
+  async function openMedia({ el, href }) {
+    safeClick(el);
+    let m = await waitOpened(1500);
+    if (!m && href) {
+      try { location.assign(href); } catch {}
+      m = await waitOpened(10000);
+    }
+    if (!m) {
+      try { el.focus(); } catch {}
+      const o = { bubbles: true, cancelable: true, view: window, key: 'Enter', keyCode: 13, which: 13, code: 'Enter' };
+      ['keydown', 'keypress', 'keyup'].forEach(evt => {
+        try { el.dispatchEvent(new KeyboardEvent(evt, o)); } catch {}
+      });
+      m = await waitOpened(10000);
+    }
+    if (!m) throw 'open_failed';
+    return m;
+  }
+
   try {
     // Fechar intersticiais
     (() => {
@@ -58,45 +98,17 @@
       });
     })();
 
-    const gridReady = await until(() => {
-      const article = document.querySelector('article');
-      if (!article) return false;
-      const tile =
-        [...article.querySelectorAll('a[href*="/p/"],a[href*="/reel/"]')].find(isVisible) ||
-        [...article.querySelectorAll('[role="link"]')].find((a) =>
-          isVisible(a) && a.querySelector('img,canvas,video,svg[aria-label*="Reels" i]')
-        );
-      return tile || false;
-    }, { timeout: 15000, step: 300 });
-    if (!gridReady) {
-      log('reason', 'no_media');
-      return send('LIKE_SKIP', 'no_media');
-    }
-
-    const anchor =
-      [...document.querySelectorAll('article a[href*="/p/"], article a[href*="/reel/"]')].find(isVisible) ||
-      [...document.querySelectorAll('article [role="link"]')].find((a) =>
-        isVisible(a) && a.querySelector('img,canvas,video,svg[aria-label*="Reels" i]')
-      );
-    if (!anchor) {
+    const target = await until(() => findFirstMediaTarget(), { timeout: 15000, step: 300 });
+    if (!target) {
       log('reason', 'no_media');
       return send('LIKE_SKIP', 'no_media');
     }
     log('foundTile', true);
 
-    safeClick(anchor);
-    mode = await waitOpened(1500);
-    if (!mode) {
-      location.assign(anchor.href);
-      mode = await waitOpened(10000);
-    }
-    if (!mode) {
-      anchor.focus();
-      const o = { bubbles: true, cancelable: true, view: window, key: 'Enter', keyCode: 13, which: 13, code: 'Enter' };
-      ['keydown', 'keypress', 'keyup'].forEach(evt => {
-        try { anchor.dispatchEvent(new KeyboardEvent(evt, o)); } catch {}
-      });
-      mode = await waitOpened(10000);
+    try {
+      mode = await openMedia(target);
+    } catch {
+      mode = null;
     }
     if (!mode) {
       log('reason', 'open_failed');
