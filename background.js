@@ -161,90 +161,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           return sendResponse({ ok: !!authorized });
       }
 
-        if (msg?.type === "LIKE_FIRST_MEDIA") {
-          const { auth, auth_lockUntil = 0, af_state = {} } = await chrome.storage.local.get([
-            "auth",
-            "auth_lockUntil",
-            "af_state",
-          ]);
-          const authorized = isAuthorized(auth, auth_lockUntil, now);
-          const paused = af_state.pausedUntil && af_state.pausedUntil > now;
-          const finished = af_state.stage >= 2;
-          if (!authorized || paused || finished) {
-            return sendResponse({ ok: false, error: "UNAUTHORIZED" });
-          }
-
-          const profileUrl = msg.profileUrl;
-          if (!profileUrl) return sendResponse({ type: "LIKE_SKIP", reason: "open_failed" });
-          console.log("[BG/LIKER] requesting like for", profileUrl);
-
-          let tab;
-          try {
-            tab = await new Promise((resolve) =>
-              chrome.tabs.create({ url: profileUrl, active: true }, resolve)
-            );
-          } catch (e) {
-            console.error("[BG/LIKER] create tab fail", e);
-            return sendResponse({ type: "LIKE_SKIP", reason: "open_failed" });
-          }
-
-          try {
-            await chrome.windows.update(tab.windowId, { focused: true });
-            await chrome.tabs.update(tab.id, { active: true });
-
-            const completed = new Promise((resolve) => {
-              const listener = (tid, info) => {
-                if (tid === tab.id && info.status === "complete") {
-                  chrome.tabs.onUpdated.removeListener(listener);
-                  resolve();
-                }
-              };
-              chrome.tabs.onUpdated.addListener(listener);
-            });
-            await Promise.race([
-              completed,
-              new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 60000)),
-            ]);
-            await new Promise((r) => setTimeout(r, 700 + Math.random() * 300));
-            const [inj] = await chrome.scripting.executeScript({
-              target: { tabId: tab.id },
-              files: ["liker.js"],
-              world: "MAIN",
-            });
-            const result = inj && inj.result ? inj.result : { type: "LIKE_SKIP", reason: "open_failed" };
-            console.log("[BG/LIKER] result", result);
-            if (result?.reason === "rate_limited") {
-              console.log("[BG/LIKER] rate limited");
-              const data = await chrome.storage.local.get(["af_state"]);
-              const st = data.af_state || {};
-              const now2 = Date.now();
-              if (st.stage === 0) {
-                const pausedUntil = now2 + 20 * 60 * 1000;
-                await chrome.storage.local.set({
-                  af_state: { ...st, pausedUntil, stage: 1, consecutiveFails: 0 },
-                });
-                chrome.alarms.create("autoFollowResume", { when: pausedUntil });
-              } else if (st.stage === 1) {
-                const pausedUntil = now2 + 30 * 60 * 1000;
-                await chrome.storage.local.set({
-                  af_state: { ...st, pausedUntil, stage: 2, consecutiveFails: 0 },
-                });
-                chrome.alarms.create("autoFollowResume", { when: pausedUntil });
-              } else {
-                await chrome.storage.local.set({
-                  af_state: { running: false, pausedUntil: 0, consecutiveFails: 0, stage: st.stage || 2 },
-                });
-                chrome.alarms.clear("autoFollowResume");
-              }
-            }
-            return sendResponse(result);
-          } catch (e) {
-            console.error("[BG/LIKER] error", e);
-            return sendResponse({ type: "LIKE_SKIP", reason: "open_failed" });
-          } finally {
-            if (tab?.id) chrome.tabs.remove(tab.id);
-          }
-        } else if (
+        if (
           ["START", "FOLLOW_ONE", "STOP", "AF_SET_ALARM", "AF_CLEAR_ALARM"].includes(
             msg?.type
           )
@@ -285,6 +202,100 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   })();
   return true;
 });
+
+// BEGIN LIKER HANDLER (do not remove this comment)
+(function attachLikerHandler(){
+  if (attachLikerHandler._bound) return; // idempotente
+
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    (async () => {
+      try {
+        if (msg?.type !== "LIKE_FIRST_MEDIA" && msg?.type !== "LIKE_REQUEST") {
+          return sendResponse({ ok:false, passthrough:true });
+        }
+
+        // Gate de autorização — use CAN_RUN se existir
+        let authorized = true;
+        try {
+          const gate = await chrome.runtime.sendMessage({ type:"CAN_RUN" });
+          authorized = !!gate?.ok;
+        } catch(_){
+          const { auth, auth_lockUntil=0 } = await chrome.storage.local.get(["auth","auth_lockUntil"]);
+          const now = Date.now();
+          authorized = (!auth_lockUntil || auth_lockUntil <= now)
+                    && auth?.state === "AUTH"
+                    && (!auth?.exp || auth.exp > now);
+        }
+        if (!authorized) return sendResponse({ ok:false, error:"UNAUTHORIZED" });
+
+        // Normaliza entrada
+        let profileUrl = msg?.profileUrl || null;
+        if (!profileUrl && msg?.type === "LIKE_REQUEST" && msg.username) {
+          profileUrl = `https://www.instagram.com/${msg.username}/`;
+        }
+        if (!profileUrl) {
+          // tentar deduzir da aba ativa
+          const [tab] = await chrome.tabs.query({active:true, currentWindow:true});
+          if (!tab?.url) return sendResponse({ ok:false, error:"NO_ACTIVE_TAB" });
+          const u = new URL(tab.url);
+          const p = u.pathname.split("/").filter(Boolean);
+          if (!p[0] || p[0]==="p" || p[0]==="reel")
+            return sendResponse({ ok:false, error:"NOT_ON_PROFILE" });
+          profileUrl = `https://www.instagram.com/${p[0]}/`;
+        }
+
+        // Abrir/ativar aba e focar janela
+        const tab = await new Promise(res => chrome.tabs.create({ url: profileUrl, active: true }, res));
+        if (!tab?.id) return sendResponse({ ok:false, error:"TAB_CREATE_FAILED" });
+        if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+
+        // Esperar carregar COMPLETO
+        await new Promise(resolve => {
+          const onUpdated = (id, info) => {
+            if (id === tab.id && info.status === "complete") {
+              chrome.tabs.onUpdated.removeListener(onUpdated);
+              resolve();
+            }
+          };
+          chrome.tabs.onUpdated.addListener(onUpdated);
+        });
+        await new Promise(r=>setTimeout(r,800)); // hidratação
+
+        // Injetar liker no MAIN
+        await chrome.scripting.executeScript({ target:{ tabId: tab.id }, files:['liker.js'], world:'MAIN' });
+
+        // Aguardar resposta do liker
+        let done=false;
+        const timer = setTimeout(()=>{
+          if (!done) {
+            chrome.runtime.onMessage.removeListener(onMsg);
+            sendResponse({ ok:false, type:"LIKE_SKIP", reason:"timeout" });
+          }
+        }, 60000);
+
+        function onMsg(m, snd){
+          if (snd?.tab?.id !== tab.id) return;
+          if (m?.type === "LIKE_DONE") {
+            done = true; clearTimeout(timer);
+            chrome.runtime.onMessage.removeListener(onMsg);
+            return sendResponse({ ok:true, ...m });
+          }
+          if (m?.type === "LIKE_SKIP") {
+            done = true; clearTimeout(timer);
+            chrome.runtime.onMessage.removeListener(onMsg);
+            return sendResponse({ ok:false, ...m });
+          }
+        }
+        chrome.runtime.onMessage.addListener(onMsg);
+      } catch(e){
+        console.error("[BG/LIKER] exception:", e);
+        sendResponse({ ok:false, type:"LIKE_SKIP", reason:"exception", detail:String(e?.message||e) });
+      }
+    })();
+    return true; // manter a porta aberta
+  });
+})();
+// END LIKER HANDLER (do not remove this comment)
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "autoFollowResume") {
