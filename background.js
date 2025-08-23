@@ -32,10 +32,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // BEGIN LIKER HANDLER (do not remove this comment)
-(function attachLikerHandler(){
+(function attachLikerHandler() {
   if (attachLikerHandler._bound) return; // idempotente
+  attachLikerHandler._bound = true;
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg?.type !== "LIKE_FIRST_MEDIA" && msg?.type !== "LIKE_REQUEST") {
+      sendResponse({ ok: false, passthrough: true });
+      return false;
+    }
+
     (async () => {
       const t0 = Date.now();
       let likeTab = null;
@@ -46,34 +52,31 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         resp.tookMs = Date.now() - t0;
         sendResponse(resp);
       };
-      try {
-        if (msg?.type !== "LIKE_FIRST_MEDIA" && msg?.type !== "LIKE_REQUEST") {
-          return finalize({ ok:false, passthrough:true });
-        }
 
+      try {
         // Normaliza entrada
         let profileUrl = msg?.profileUrl || null;
         if (!profileUrl && msg?.type === "LIKE_REQUEST" && msg.username) {
           profileUrl = `https://www.instagram.com/${msg.username}/`;
         }
         if (!profileUrl) {
-          // tentar deduzir da aba ativa
-          const [tab] = await chrome.tabs.query({active:true, currentWindow:true});
-          if (!tab?.url) return finalize({ ok:false, error:"NO_ACTIVE_TAB" });
+          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+          if (!tab?.url) return finalize({ ok: false, type: "LIKE_SKIP", reason: "NO_ACTIVE_TAB" });
           const u = new URL(tab.url);
           const p = u.pathname.split("/").filter(Boolean);
-          if (!p[0] || p[0]==="p" || p[0]==="reel")
-            return finalize({ ok:false, error:"NOT_ON_PROFILE" });
+          if (!p[0] || p[0] === "p" || p[0] === "reel") {
+            return finalize({ ok: false, type: "LIKE_SKIP", reason: "NOT_ON_PROFILE" });
+          }
           profileUrl = `https://www.instagram.com/${p[0]}/`;
         }
 
-        // Abrir/ativar aba e focar janela
-        likeTab = await new Promise(res => chrome.tabs.create({ url: profileUrl, active: true }, res));
-        if (!likeTab?.id) return finalize({ ok:false, error:"TAB_CREATE_FAILED" });
+        // Abrir aba de perfil
+        likeTab = await chrome.tabs.create({ url: profileUrl, active: true });
+        if (!likeTab?.id) return finalize({ ok: false, type: "LIKE_SKIP", reason: "TAB_CREATE_FAILED" });
         if (likeTab.windowId) await chrome.windows.update(likeTab.windowId, { focused: true });
 
-        // Esperar carregar COMPLETO
-        await new Promise(resolve => {
+        // Esperar carregamento completo
+        await new Promise((resolve) => {
           const onUpdated = (id, info) => {
             if (id === likeTab.id && info.status === "complete") {
               chrome.tabs.onUpdated.removeListener(onUpdated);
@@ -82,36 +85,28 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           };
           chrome.tabs.onUpdated.addListener(onUpdated);
         });
-        await new Promise(r=>setTimeout(r,800)); // hidratação
+        await new Promise((r) => setTimeout(r, 800));
 
-        // Injetar liker no MAIN
-        await chrome.scripting.executeScript({ target:{ tabId: likeTab.id }, files:['liker.js'], world:'MAIN' });
+        // Injetar liker
+        await chrome.scripting.executeScript({
+          target: { tabId: likeTab.id },
+          files: ["liker.js"],
+          world: "MAIN",
+        });
 
-        // Aguardar resposta do liker
-        let done=false;
-        const timer = setTimeout(()=>{
-          if (!done) {
-            chrome.runtime.onMessage.removeListener(onMsg);
-            finalize({ ok:false, type:"LIKE_SKIP", reason:"timeout" });
-          }
-        }, 60000);
-
-        function onMsg(m, snd){
+        const onMsg = (m, snd) => {
           if (snd?.tab?.id !== likeTab.id) return;
-          if (m?.type === "LIKE_DONE") {
-            done = true; clearTimeout(timer);
-            chrome.runtime.onMessage.removeListener(onMsg);
-            finalize({ ok:true, type:"LIKE_DONE", mode:m.mode });
-          } else if (m?.type === "LIKE_SKIP") {
-            done = true; clearTimeout(timer);
-            chrome.runtime.onMessage.removeListener(onMsg);
-            finalize({ ok:false, type:"LIKE_SKIP", mode:m.mode, reason:m.reason });
-          }
-        }
+          chrome.runtime.onMessage.removeListener(onMsg);
+          finalize({ ok: m.type === "LIKE_DONE", type: m.type, mode: m.mode, reason: m.reason });
+        };
         chrome.runtime.onMessage.addListener(onMsg);
-      } catch(e){
-        console.error("[BG/LIKER] exception:", e);
-        finalize({ ok:false, type:"LIKE_SKIP", reason:"exception", detail:String(e?.message||e) });
+
+        setTimeout(() => {
+          chrome.runtime.onMessage.removeListener(onMsg);
+          finalize({ ok: false, type: "LIKE_SKIP", reason: "timeout" });
+        }, 60000);
+      } catch (e) {
+        finalize({ ok: false, type: "LIKE_SKIP", reason: "exception", detail: String(e?.message || e) });
       }
     })();
     return true; // manter a porta aberta

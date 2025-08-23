@@ -29,46 +29,26 @@
   }
 
   const t0 = Date.now();
-  let mode = undefined;
+  let mode;
   const send = (type, reason) => {
     const payload = { type, mode, tookMs: Date.now() - t0 };
     if (reason) payload.reason = reason;
     chrome.runtime.sendMessage(payload);
   };
 
-  async function waitProfileGrid() {
-    return !!(await until(() => {
-      const article = document.querySelector('article');
-      if (!article) return null;
-      const tile = article.querySelector('a[href*="/p/"], a[href*="/reel/"], [role="link"]');
-      return tile ? article : null;
-    }, { timeout: 15000, step: 300 }));
-  }
-
-  async function findFirstMediaAnchor() {
-    const attempts = 3;
-    for (let i = 0; i < attempts; i++) {
-      let anchors = [...document.querySelectorAll('article a[href*="/p/"], article a[href*="/reel/"]')].filter(isVisible);
-      if (anchors.length) return anchors[0];
-
-      anchors = [...document.querySelectorAll('article [role="link"]')].filter(el => {
-        if (!isVisible(el)) return false;
-        return !!el.querySelector('img,canvas,video,svg[aria-label*="Reels" i]');
-      });
-      if (anchors.length) return anchors[0];
-
-      window.scrollBy(0, 800);
-      await sleep(300);
-    }
+  function openedMode() {
+    if (document.querySelector('[role="dialog"] article')) return 'modal';
+    if (/^\/(p|reel)\//.test(location.pathname)) return 'route';
     return null;
   }
+  const waitOpened = (ms) => until(() => openedMode(), { timeout: ms, step: 150 });
 
   try {
     // Fechar intersticiais
     (() => {
       const texts = [
         'Fechar', 'Close', 'Agora não', 'Not now', 'Aceitar', 'Accept', 'Allow',
-        'Abrir app', 'Open app', 'Ver foto', 'See photo', 'Talvez depois', 'Maybe later'
+        'Abrir app', 'Open app', 'Talvez depois', 'Maybe later', 'Ver foto', 'See photo'
       ];
       [...document.querySelectorAll('button,[role="button"]')].forEach(b => {
         const t = (b.ariaLabel || b.innerText || '').trim().toLowerCase();
@@ -78,81 +58,97 @@
       });
     })();
 
-    const gridReady = await waitProfileGrid();
+    const gridReady = await until(() => {
+      const article = document.querySelector('article');
+      if (!article) return false;
+      const tile =
+        [...article.querySelectorAll('a[href*="/p/"],a[href*="/reel/"]')].find(isVisible) ||
+        [...article.querySelectorAll('[role="link"]')].find((a) =>
+          isVisible(a) && a.querySelector('img,canvas,video,svg[aria-label*="Reels" i]')
+        );
+      return tile || false;
+    }, { timeout: 15000, step: 300 });
     if (!gridReady) {
-      log('no media');
+      log('reason', 'no_media');
       return send('LIKE_SKIP', 'no_media');
     }
 
-    window.scrollTo(0, 0);
-    await sleep(200);
-
-    const anchor = await findFirstMediaAnchor();
+    const anchor =
+      [...document.querySelectorAll('article a[href*="/p/"], article a[href*="/reel/"]')].find(isVisible) ||
+      [...document.querySelectorAll('article [role="link"]')].find((a) =>
+        isVisible(a) && a.querySelector('img,canvas,video,svg[aria-label*="Reels" i]')
+      );
     if (!anchor) {
-      log('no media');
+      log('reason', 'no_media');
       return send('LIKE_SKIP', 'no_media');
     }
+    log('foundTile', true);
 
     safeClick(anchor);
-
-    mode = 'modal';
-    const modal = await until(() => document.querySelector('[role="dialog"] article'), { timeout: 10000, step: 200 });
-    if (!modal) {
-      mode = 'route';
-      const opened = await until(() => /^(\/p\/|\/reel\/)/.test(location.pathname), { timeout: 10000, step: 200 });
-      if (!opened) {
-        log('open_failed');
-        return send('LIKE_SKIP', 'open_failed');
-      }
+    mode = await waitOpened(1500);
+    if (!mode) {
+      location.assign(anchor.href);
+      mode = await waitOpened(10000);
     }
+    if (!mode) {
+      anchor.focus();
+      const o = { bubbles: true, cancelable: true, view: window, key: 'Enter', keyCode: 13, which: 13, code: 'Enter' };
+      ['keydown', 'keypress', 'keyup'].forEach(evt => {
+        try { anchor.dispatchEvent(new KeyboardEvent(evt, o)); } catch {}
+      });
+      mode = await waitOpened(10000);
+    }
+    if (!mode) {
+      log('reason', 'open_failed');
+      return send('LIKE_SKIP', 'open_failed');
+    }
+    log('openMode', mode);
+
     const ctx = mode === 'modal' ? document.querySelector('[role="dialog"]') : document;
 
-    function findLikeBtn() {
-      const article = ctx.querySelector('article') || ctx;
-      const pressed = article.querySelector('button[aria-pressed="true"]');
-      const unpressed = article.querySelector('button[aria-pressed="false"]');
-      const likeLbl = article.querySelector('button[aria-label*="Curtir" i],button[aria-label*="Like" i]');
-      const unlikeLbl = article.querySelector('button[aria-label*="Descurtir" i],button[aria-label*="Unlike" i]');
-      return { article, pressed, unpressed, likeLbl, unlikeLbl };
+    function getLikeState() {
+      const scope = ctx.querySelector('article') || ctx;
+      const pressed = scope.querySelector('button[aria-pressed="true"]');
+      const unpressed = scope.querySelector('button[aria-pressed="false"]');
+      const likeLbl = scope.querySelector('button[aria-label*="Curtir" i],button[aria-label*="Like" i]');
+      const unlikeLbl = scope.querySelector('button[aria-label*="Descurtir" i],button[aria-label*="Unlike" i]');
+      const btn = pressed || unpressed || likeLbl || unlikeLbl;
+      return { btn, liked: !!(pressed || unlikeLbl) };
     }
-    const alreadyLiked = (s) => !!(s.pressed || s.unlikeLbl);
 
-    let state = findLikeBtn();
-    if (!(state.pressed || state.unpressed || state.likeLbl || state.unlikeLbl)) {
-      log('like_button_not_found');
+    let state = getLikeState();
+    log('likeStateBefore', state);
+    if (!state.btn) {
+      log('reason', 'like_button_not_found');
       return send('LIKE_SKIP', 'like_button_not_found');
     }
-    if (alreadyLiked(state)) {
+    if (state.liked) {
       if (mode === 'modal') ctx.querySelector('[aria-label*="Fechar" i],[aria-label*="Close" i]')?.click();
       return send('LIKE_DONE');
     }
 
     async function clickAndConfirm() {
-      let f = findLikeBtn();
-      const btn = f.unpressed || f.likeLbl || f.pressed || f.unlikeLbl;
-      if (!btn) return false;
-      safeClick(btn);
-      await sleep(300);
-      const ok = await until(() => {
-        const g = findLikeBtn();
-        return alreadyLiked(g);
-      }, { timeout: 8000, step: 150 });
-      return !!ok;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        state = getLikeState();
+        if (!state.btn) return false;
+        safeClick(state.btn);
+        await sleep(300);
+        const ok = await until(() => getLikeState().liked, { timeout: 8000, step: 150 });
+        if (ok) return true;
+        await sleep(500);
+      }
+      return false;
     }
 
-    let ok = await clickAndConfirm();
-    if (!ok) {
-      log('retrying...');
-      await sleep(500);
-      ok = await clickAndConfirm();
-    }
-    if (!ok) {
-      log('state_not_changed');
+    const liked = await clickAndConfirm();
+    state = getLikeState();
+    log('likeStateAfter', state);
+    if (!liked) {
+      log('reason', 'state_not_changed');
       return send('LIKE_SKIP', 'state_not_changed');
     }
 
     if (mode === 'modal') ctx.querySelector('[aria-label*="Fechar" i],[aria-label*="Close" i]')?.click();
-    log('LIKE_DONE');
     return send('LIKE_DONE');
   } catch (e) {
     console.error('[LIKER] exception', e);
