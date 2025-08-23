@@ -39,18 +39,6 @@ button:hover {
     background-color: #2a76c0;
 }
 
-#loginView {
-    text-align: center;
-}
-
-#logoutBtn {
-    background-color: #888;
-}
-
-#logoutBtn:hover {
-    background-color: #666;
-}
-
 #autoFollowOverlay {
     position: fixed;
     bottom: 20px;

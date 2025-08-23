@@ -1,31 +1,14 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const loginView = document.getElementById('loginView');
-  const appView = document.getElementById('appView');
-  const loginMsg = document.getElementById('loginMsg');
-
-  function showLogin(text = "") {
-    if (loginView) loginView.style.display = 'block';
-    if (appView) appView.style.display = 'none';
-    if (loginMsg) loginMsg.textContent = text || "";
-  }
-
-  function showApp() {
-    if (loginView) loginView.style.display = 'none';
-    if (appView) appView.style.display = 'block';
-    if (loginMsg) loginMsg.textContent = "";
-    refreshStatus();
-  }
-
-    chrome.storage.sync.get(['minDelay', 'maxDelay', 'limite', 'likeFirstMedia'], (data) => {
-      const quantidade = document.getElementById('quantidade');
-      const minDelay = document.getElementById('minDelay');
-      const maxDelay = document.getElementById('maxDelay');
-      const likeFirst = document.getElementById('likeFirstMedia');
-      if (quantidade) quantidade.value = data.limite || 10;
-      if (minDelay) minDelay.value = data.minDelay || 120;
-      if (maxDelay) maxDelay.value = data.maxDelay || 180;
-      if (likeFirst) likeFirst.checked = data.likeFirstMedia || false;
-    });
+  chrome.storage.sync.get(['minDelay', 'maxDelay', 'limite', 'likeFirstMedia'], (data) => {
+    const quantidade = document.getElementById('quantidade');
+    const minDelay = document.getElementById('minDelay');
+    const maxDelay = document.getElementById('maxDelay');
+    const likeFirst = document.getElementById('likeFirstMedia');
+    if (quantidade) quantidade.value = data.limite || 10;
+    if (minDelay) minDelay.value = data.minDelay || 120;
+    if (maxDelay) maxDelay.value = data.maxDelay || 180;
+    if (likeFirst) likeFirst.checked = data.likeFirstMedia || false;
+  });
 
   function refreshStatus() {
     chrome.storage.local.get('af_state', (data) => {
@@ -57,12 +40,12 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   document.getElementById('startBtn')?.addEventListener('click', () => {
-      const limite = parseInt(document.getElementById('quantidade')?.value) || 10;
-      const minDelay = parseInt(document.getElementById('minDelay')?.value) || 120;
-      const maxDelay = parseInt(document.getElementById('maxDelay')?.value) || 180;
-      const likeFirst = document.getElementById('likeFirstMedia')?.checked || false;
+    const limite = parseInt(document.getElementById('quantidade')?.value) || 10;
+    const minDelay = parseInt(document.getElementById('minDelay')?.value) || 120;
+    const maxDelay = parseInt(document.getElementById('maxDelay')?.value) || 180;
+    const likeFirst = document.getElementById('likeFirstMedia')?.checked || false;
 
-      chrome.storage.sync.set({ minDelay, maxDelay, limite, likeFirstMedia: likeFirst });
+    chrome.storage.sync.set({ minDelay, maxDelay, limite, likeFirstMedia: likeFirst });
 
     chrome.storage.local.get('af_state', (data) => {
       const st = data.af_state || {};
@@ -70,7 +53,7 @@ document.addEventListener('DOMContentLoaded', () => {
         { af_state: { ...st, running: true, pausedUntil: 0, consecutiveFails: 0 } },
         () => {
           chrome.runtime.sendMessage({ type: 'AF_CLEAR_ALARM' });
-            sendMessageToActiveTab({ action: 'start', limite, minDelay, maxDelay, likeFirstMedia: likeFirst });
+          sendMessageToActiveTab({ action: 'start', limite, minDelay, maxDelay, likeFirstMedia: likeFirst });
           refreshStatus();
         }
       );
@@ -96,65 +79,6 @@ document.addEventListener('DOMContentLoaded', () => {
     );
   });
 
-  async function refreshUI() {
-    let res;
-    try {
-      res = await chrome.runtime.sendMessage({ type: 'AUTH_STATUS' });
-    } catch (e) {
-      console.warn('[POPUP] AUTH_STATUS failed:', e);
-    }
-    if (!res) return showLogin('Carregando autenticação...');
-    const now = (res && res.now) || Date.now();
-    const lockUntil = res?.auth_lockUntil || 0;
-    const authed = !!(
-      res?.auth &&
-      res.auth.state === 'AUTH' &&
-      (!res.auth.exp || res.auth.exp > now)
-    );
-
-    if (lockUntil > now) {
-      const untilStr = new Date(lockUntil).toLocaleTimeString();
-      return showLogin(`Bloqueado até ${untilStr}.`);
-    }
-    if (authed) return showApp();
-    return showLogin('');
-  }
-
-  const btnLogin = document.getElementById('loginBtn');
-  const inpUser = document.getElementById('loginUser');
-  const inpPass = document.getElementById('loginPass');
-  const btnLogout = document.getElementById('logoutBtn');
-
-  btnLogin?.addEventListener('click', async () => {
-    const user = (inpUser?.value || '').trim();
-    const pass = (inpPass?.value || '').trim();
-    let r;
-    try {
-      r = await chrome.runtime.sendMessage({ type: 'AUTH_LOGIN', user, pass });
-    } catch (e) {
-      return showLogin('Falha de comunicação.');
-    }
-    if (r?.ok) return refreshUI();
-    if (r?.error === 'LOCKED_UNTIL') {
-      const untilStr = new Date(r.lockUntil).toLocaleTimeString();
-      return showLogin(`Bloqueado até ${untilStr}.`);
-    }
-    if (r?.error === 'USER_NOT_FOUND') {
-      return showLogin('Usuário não encontrado.');
-    }
-    if (r?.error === 'INVALID_PASSWORD') {
-      return showLogin('Senha incorreta.');
-    }
-    return showLogin('Usuário ou senha inválidos.');
-  });
-
-  btnLogout?.addEventListener('click', async () => {
-    try {
-      await chrome.runtime.sendMessage({ type: 'AUTH_LOGOUT' });
-    } catch (e) {}
-    refreshUI();
-  });
-
-  refreshUI();
+  refreshStatus();
 });
 
