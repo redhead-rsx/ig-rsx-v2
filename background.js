@@ -6,12 +6,12 @@ const AUTH = {
   DEFAULT_EXP_MS: 7 * 24 * 60 * 60 * 1000,
   USERS: [
     {
-      username: "dias",
-      hash: "24fc4f96f03f7148e570b560903f75ed30a433b91e7ce098289fb0c18093c539",
+      username: "gabriel",
+      hash: "34a20f9c8697f88e0d08f5ac8af57d2c030a0d83b49e88f67b5f18d6c1d8a4af",
     },
     {
       username: "milton",
-      hash: "0c0bf1c79bc8b2a2d53f6e9d584103c2003032bc8986e0159de3dd802eff4096",
+      hash: "91b2d72f3e2a62d934ce3182366c30cf6bff0f293e26853567122831c98c66f4",
     },
   ],
 };
