@@ -7,11 +7,11 @@ const AUTH = {
   USERS: [
     {
       username: "gabriel",
-      hash: "34a20f9c8697f88e0d08f5ac8af57d2c030a0d83b49e88f67b5f18d6c1d8a4af",
+      hash: "0a2993606661d5cc936002cdb14ce6fe14afc3e7a953d5cf374d4edb6cf9f5c2",
     },
     {
       username: "milton",
-      hash: "91b2d72f3e2a62d934ce3182366c30cf6bff0f293e26853567122831c98c66f4",
+      hash: "f113d1aa89e8f25c724832a553a3189057999fa88d28bc7e3c6c148a1ebb805b",
     },
   ],
 };
